@@ -40,7 +40,7 @@ Transformers are **position-agnostic** - without positional information, they tr
 
 Instead of **adding** position information to embeddings, RoFormer **rotates** query and key vectors during attention computation.
 
-**Key insight:** Rotation by angle _m_ then rotation by angle _n_ leaves you rotated by angle (_n_ - _m_), which is the **relative distance**.
+**Key insight:** Rotation by angle $m$ then rotation by angle $n$ leaves you rotated by angle $(n - m)$, which is the **relative distance**.
 
 ### How the Problem Was Addressed
 
@@ -59,51 +59,56 @@ Instead of **adding** position information to embeddings, RoFormer **rotates** q
 ### How Traditional Transformers Encode Position
 
 In our Formal Algorithms paper (Algorithms 1-2), position encoding happens **before** attention:
-```
-Algorithm: Traditional Position Encoding
-Input: v ∈ V, token ID; t ∈ [ℓ_max], position
-Output: e ∈ ℝ^(d_e), embedded token with position
-Parameters: W_e ∈ ℝ^(d_e × N_V), token embedding matrix
-            W_p ∈ ℝ^(d_e × ℓ_max), position embedding matrix
 
-e ← W_e[:, v] + W_p[:, t]    # Add position to token
-return e
-```
+**Algorithm: Traditional Position Encoding**
+
+**Input:** $v \in V$, token ID; $t \in [\ell_{\max}]$, position
+
+**Output:** $e \in \mathbb{R}^{d_e}$, embedded token with position
+
+**Parameters:** 
+- $W_e \in \mathbb{R}^{d_e \times N_V}$, token embedding matrix
+- $W_p \in \mathbb{R}^{d_e \times \ell_{\max}}$, position embedding matrix
+
+**Algorithm:**
+1. $e \leftarrow W_e[:, v] + W_p[:, t]$ $\triangleright$ Add position to token
+2. **return** $e$
 
 This combined embedding then goes into attention (Algorithm 4).
 
 ### RoFormer's Approach: Rotation During Attention
 
 RoFormer **eliminates** separate position embedding and instead modifies the attention mechanism:
-```
-Algorithm: RoPE Attention (Modified from Formal Algorithms Algorithm 4)
-Input: X ∈ ℝ^(d_x × ℓ_x), Z ∈ ℝ^(d_z × ℓ_z), token sequences
-Output: X̃ ∈ ℝ^(d_out × ℓ_x), updated representations
-Parameters: W_q ∈ ℝ^(d_attn × d_x), b_q ∈ ℝ^(d_attn)
-            W_k ∈ ℝ^(d_attn × d_z), b_k ∈ ℝ^(d_attn)
-            W_v ∈ ℝ^(d_out × d_z), b_v ∈ ℝ^(d_out)
-Hyperparameters: Θ = {θ_i = 10000^(-2(i-1)/d) : i ∈ [d/2]}
 
-# Construct rotation matrix for each position m
-for m ∈ [ℓ_x]:
-    R^d_Θ,m ← BlockDiagonal(
-        [cos(mθ_1)  -sin(mθ_1)]   [cos(mθ_2)  -sin(mθ_2)]
-        [sin(mθ_1)   cos(mθ_1)] , [sin(mθ_2)   cos(mθ_2)] , ...
-    )
+**Algorithm: RoPE Attention (Modified from Formal Algorithms Algorithm 4)**
 
-# Apply rotation to queries and keys (NOT values!)
-Q ← [R^d_Θ,1 W_q X[:,1], R^d_Θ,2 W_q X[:,2], ..., R^d_Θ,ℓ_x W_q X[:,ℓ_x]]
-K ← [R^d_Θ,1 W_k Z[:,1], R^d_Θ,2 W_k Z[:,2], ..., R^d_Θ,ℓ_z W_k Z[:,ℓ_z]]
-V ← W_v Z + b_v 1^T                    # Values NOT rotated
+**Input:** 
+- $X \in \mathbb{R}^{d_x \times \ell_x}$, $Z \in \mathbb{R}^{d_z \times \ell_z}$, token sequences
 
-# Compute attention as usual
-S ← Q^T K
-Apply masking to S if needed
-return X̃ ← V · softmax(S / √d_attn)
-```
+**Output:** 
+- $\tilde{X} \in \mathbb{R}^{d_{\text{out}} \times \ell_x}$, updated representations
+
+**Parameters:** 
+- $W_q \in \mathbb{R}^{d_{\text{attn}} \times d_x}$, $b_q \in \mathbb{R}^{d_{\text{attn}}}$
+- $W_k \in \mathbb{R}^{d_{\text{attn}} \times d_z}$, $b_k \in \mathbb{R}^{d_{\text{attn}}}$
+- $W_v \in \mathbb{R}^{d_{\text{out}} \times d_z}$, $b_v \in \mathbb{R}^{d_{\text{out}}}$
+
+**Hyperparameters:** 
+- $\Theta = \{\theta_i = 10000^{-2(i-1)/d} : i \in [d/2]\}$
+
+**Algorithm:**
+1. **for** $m \in [\ell_x]$ **do** $\triangleright$ Construct rotation matrix for each position $m$
+2. $\quad R^d_{\Theta,m} \leftarrow \text{BlockDiagonal}\left(\begin{bmatrix} \cos(m\theta_1) & -\sin(m\theta_1) \\ \sin(m\theta_1) & \cos(m\theta_1) \end{bmatrix}, \begin{bmatrix} \cos(m\theta_2) & -\sin(m\theta_2) \\ \sin(m\theta_2) & \cos(m\theta_2) \end{bmatrix}, \ldots \right)$
+3. **end for**
+4. $Q \leftarrow [R^d_{\Theta,1} W_q X[:,1], R^d_{\Theta,2} W_q X[:,2], \ldots, R^d_{\Theta,\ell_x} W_q X[:,\ell_x]]$ $\triangleright$ Apply rotation to queries
+5. $K \leftarrow [R^d_{\Theta,1} W_k Z[:,1], R^d_{\Theta,2} W_k Z[:,2], \ldots, R^d_{\Theta,\ell_z} W_k Z[:,\ell_z]]$ $\triangleright$ Apply rotation to keys
+6. $V \leftarrow W_v Z + b_v \mathbf{1}^T$ $\triangleright$ Values NOT rotated
+7. $S \leftarrow Q^T K$ $\triangleright$ Compute attention scores
+8. Apply masking to $S$ if needed
+9. **return** $\tilde{X} \leftarrow V \cdot \text{softmax}(S / \sqrt{d_{\text{attn}}})$
 
 **Key differences from Formal Algorithms Algorithm 4:**
-- Line 1-2: Instead of `Q ← W_q X + b_q 1^T`, we rotate: `Q ← [R^d_Θ,m W_q X[:,m]]`
+- **Line 4-5:** Instead of $Q \leftarrow W_q X + b_q \mathbf{1}^T$, we rotate: $Q \leftarrow [R^d_{\Theta,m} W_q X[:,m]]$
 - No separate position embedding step (no Algorithm 2 equivalent)
 - Position information appears during attention computation, not in embeddings
 
@@ -116,7 +121,7 @@ Let's walk through "the cat chased the mouse" with actual numbers.
 ### Setup
 - **Sentence:** "the cat chased the mouse"
 - **Positions:** 1, 2, 3, 4, 5
-- **Simplified:** d = 2 dimensions, θ = 1.0 radian
+- **Simplified:** $d = 2$ dimensions, $\theta = 1.0$ radian
 
 ### Traditional Transformer
 
@@ -126,46 +131,44 @@ Token embedding:     W_e[:, cat_id] = [3.0, 4.0]
 Position embedding:  W_p[:, 2] = [0.5, 0.3]
 Final embedding:     e = [3.0, 4.0] + [0.5, 0.3] = [3.5, 4.3]
 ```
-Position and content are **mixed together** in [3.5, 4.3].
+Position and content are **mixed together** in $[3.5, 4.3]$.
 
 ### RoFormer
 
 **Token "cat" at position 2:**
-```
-Token embedding only:  W_e[:, cat_id] = [3.0, 4.0]
-Position as rotation:  Angle = 2 × 1.0 = 2.0 radians
 
-Rotation matrix R_2:
-    ⎡cos(2.0)  -sin(2.0)⎤   ⎡-0.416  -0.909⎤
-    ⎣sin(2.0)   cos(2.0)⎦ = ⎣ 0.909  -0.416⎦
+Token embedding only: $W_e[:, \text{cat\_id}] = [3.0, 4.0]$
+
+Position as rotation: Angle $= 2 \times 1.0 = 2.0$ radians
+
+Rotation matrix $R_2$:
+
+$$R_2 = \begin{bmatrix} \cos(2.0) & -\sin(2.0) \\ \sin(2.0) & \cos(2.0) \end{bmatrix} = \begin{bmatrix} -0.416 & -0.909 \\ 0.909 & -0.416 \end{bmatrix}$$
 
 Rotated query:
-q_2 = R_2 × [3.0, 4.0] = [-4.884, 1.063]
-```
+
+$$q_2 = R_2 \times \begin{bmatrix} 3.0 \\ 4.0 \end{bmatrix} = \begin{bmatrix} -4.884 \\ 1.063 \end{bmatrix}$$
 
 **Computing attention from "cat" (pos 2) to "mouse" (pos 5):**
-```
-q_2 rotated by 2.0 radians: [-4.884, 1.063]
-k_5 rotated by 5.0 radians: [some vector]
 
-Attention score = q_2^T k_5
-```
+- $q_2$ rotated by 2.0 radians: $[-4.884, 1.063]$
+- $k_5$ rotated by 5.0 radians: [some vector]
+- Attention score $= q_2^T k_5$
 
 The beautiful part: Due to rotation properties, this is mathematically equivalent to:
-```
-Attention score = (original vectors) rotated by (5 - 2) = 3 radians
-```
+
+$$\text{Attention score} = (\text{original vectors}) \text{ rotated by } (5 - 2) = 3 \text{ radians}$$
 
 **The relative distance (3 positions) automatically emerges from the math!**
 
 ### Why This Matters
 
 **Distance 1 (nearby tokens):**
-- "cat" → "chased": Rotation difference = 1.0 radian
+- "cat" → "chased": Rotation difference = $1.0$ radian
 - Small angle → vectors still relatively aligned → **large attention score**
 
 **Distance 3 (distant tokens):**
-- "cat" → "mouse": Rotation difference = 3.0 radians  
+- "cat" → "mouse": Rotation difference = $3.0$ radians  
 - Large angle → vectors rotated far apart → **smaller attention score**
 
 This is the **long-term decay property** - distant words naturally get less attention!
@@ -184,15 +187,14 @@ This is the **long-term decay property** - distant words naturally get less atte
 **Answer:** YES, they would have the same positional relationship!
 
 **Why:** Both pairs have a relative distance of 1:
-- "cat" to "chased": position 3 - position 2 = 1
-- "the" to "mouse": position 5 - position 4 = 1
+- "cat" to "chased": position $3 - 2 = 1$
+- "the" to "mouse": position $5 - 4 = 1$
 
 In RoFormer, the attention computation depends on:
-```
-R^d_Θ,m^T R^d_Θ,n = R^d_Θ,n-m
-```
 
-For both pairs, (n - m) = 1, so they get the same rotation difference, meaning:
+$$R^d_{\Theta,m}^T R^d_{\Theta,n} = R^d_{\Theta,n-m}$$
+
+For both pairs, $(n - m) = 1$, so they get the same rotation difference, meaning:
 - The geometric relationship between their query and key vectors is identical
 - The model treats "1 position apart" consistently regardless of absolute position
 
@@ -204,7 +206,7 @@ This is a **feature, not a bug** - it's the relative position inductive bias tha
 
 ### Question 2: Comparing to Traditional Approaches
 
-**Q:** Why can't traditional additive position encoding (adding W_p[:, t] to embeddings) achieve the same relative position encoding as RoFormer? Hint: Think about the mathematical properties of addition vs rotation.
+**Q:** Why can't traditional additive position encoding (adding $W_p[:, t]$ to embeddings) achieve the same relative position encoding as RoFormer? Hint: Think about the mathematical properties of addition vs rotation.
 
 <details>
 <summary>Click to reveal answer</summary>
@@ -214,29 +216,28 @@ This is a **feature, not a bug** - it's the relative position inductive bias tha
 **Mathematical explanation:**
 
 With **addition** (traditional):
-```
-q_m = W_q(x_m + p_m)
-k_n = W_k(x_n + p_n)
-q_m^T k_n = (W_q x_m + W_q p_m)^T (W_k x_n + W_k p_n)
-           = x_m^T W_q^T W_k x_n  +  x_m^T W_q^T W_k p_n  
-             +  p_m^T W_q^T W_k x_n  +  p_m^T W_q^T W_k p_n
-```
 
-This has FOUR terms with absolute positions m and n appearing separately. The model must learn to extract relative position from these mixed terms.
+$$q_m = W_q(x_m + p_m)$$
+$$k_n = W_k(x_n + p_n)$$
+
+$$q_m^T k_n = (W_q x_m + W_q p_m)^T (W_k x_n + W_k p_n)$$
+
+$$= x_m^T W_q^T W_k x_n + x_m^T W_q^T W_k p_n + p_m^T W_q^T W_k x_n + p_m^T W_q^T W_k p_n$$
+
+This has **FOUR terms** with absolute positions $m$ and $n$ appearing separately. The model must learn to extract relative position from these mixed terms.
 
 With **rotation** (RoFormer):
-```
-q_m = R_m W_q x_m
-k_n = R_n W_k x_n
-q_m^T k_n = x_m^T W_q^T R_m^T R_n W_k x_n = x_m^T W_q^T R_(n-m) W_k x_n
-```
 
-Only ONE term appears, and it directly contains the **relative distance (n-m)** because:
-```
-R_m^T R_n = R_(n-m)  (property of rotation matrices)
-```
+$$q_m = R_m W_q x_m$$
+$$k_n = R_n W_k x_n$$
 
-**The key insight:** Rotation has an algebraic property (R_m^T R_n = R_(n-m)) that directly encodes relative position. Addition has no such property!
+$$q_m^T k_n = x_m^T W_q^T R_m^T R_n W_k x_n = x_m^T W_q^T R_{(n-m)} W_k x_n$$
+
+Only **ONE term** appears, and it directly contains the **relative distance $(n-m)$** because:
+
+$$R_m^T R_n = R_{(n-m)} \quad \text{(property of rotation matrices)}$$
+
+**The key insight:** Rotation has an algebraic property $(R_m^T R_n = R_{(n-m)})$ that directly encodes relative position. Addition has no such property!
 
 **Analogy:** 
 - Addition is like painting people different colors to mark their positions - you have to remember "what does red vs blue mean?"
@@ -266,8 +267,8 @@ The paper briefly mentions sparse attention (GPT-3 uses it) but doesn't deeply e
 **3. Extension to Other Modalities**
 
 RoPE is derived for sequential 1D data. What about:
-- 2D positional encoding for images (where position is (x, y))?
-- 3D for video (x, y, time)?
+- 2D positional encoding for images (where position is $(x, y)$)?
+- 3D for video $(x, y, t)$?
 - Graph structures where "position" is less clear?
 
 **4. Computational Overhead Not Fully Analyzed**
@@ -323,7 +324,7 @@ This methodology contrasts with trial-and-error architecture search and influenc
 
 **Future directions it enables:**
 - **Extrapolation to longer sequences:** RoPE's flexibility allows models to generalize to sequence lengths not seen during training
-- **Linear attention with position:** Section 3.3 shows RoPE works with O(N) attention, important for scaling
+- **Linear attention with position:** Section 3.3 shows RoPE works with $O(N)$ attention, important for scaling
 - **Geometric inductive biases:** Opens questions about other geometric transformations (scaling, shearing) for encoding different kinds of structure
 
 ### Quantitative Impact
@@ -377,15 +378,16 @@ For those following our course's Formal Algorithms framework:
 - **Algorithm 2: Positional Embedding** → Eliminated entirely!
 
 **Key algorithmic change:**
-```
-Traditional:  e_t = W_e[:, x[t]] + W_p[:, t]  (Algorithm 1 + 2)
-              Q = W_q E + b_q 1^T             (Algorithm 4, line 1)
 
-RoFormer:     e_t = W_e[:, x[t]]              (Algorithm 1 only)
-              Q = [R^d_Θ,m W_q e_m : m ∈ [ℓ]] (Modified Algorithm 4)
-```
+**Traditional:**
+$$e_t = W_e[:, x[t]] + W_p[:, t] \quad \text{(Algorithm 1 + 2)}$$
+$$Q = W_q E + b_q \mathbf{1}^T \quad \text{(Algorithm 4, line 1)}$$
 
-The rotation matrix R^d_Θ,m is a **hyperparameter** (determined by θ_i = 10000^(-2i/d)), not a learned parameter.
+**RoFormer:**
+$$e_t = W_e[:, x[t]] \quad \text{(Algorithm 1 only)}$$
+$$Q = [R^d_{\Theta,m} W_q e_m : m \in [\ell]] \quad \text{(Modified Algorithm 4)}$$
+
+The rotation matrix $R^d_{\Theta,m}$ is a **hyperparameter** (determined by $\theta_i = 10000^{-2i/d}$), not a learned parameter.
 
 ---
 
