@@ -98,7 +98,35 @@ RoFormer **eliminates** separate position embedding and instead modifies the att
 
 **Algorithm:**
 1. **for** $m \in [\ell_x]$ **do** $\triangleright$ Construct rotation matrix for each position $m$
-2. $\quad R^d_{\Theta,m} \leftarrow \text{BlockDiagonal}\left(\begin{bmatrix} \cos(m\theta_1) & -\sin(m\theta_1) \\ \sin(m\theta_1) & \cos(m\theta_1) \end{bmatrix}, \begin{bmatrix} \cos(m\theta_2) & -\sin(m\theta_2) \\ \sin(m\theta_2) & \cos(m\theta_2) \end{bmatrix}, \ldots \right)$
+2. The rotation matrix for position $m$ is:
+
+The full rotation matrix for position $m$ in $d$ dimensions is a block-diagonal matrix:
+
+$$
+R^d_{\Theta,m} = 
+\begin{bmatrix}
+\cos(m\theta_1) & -\sin(m\theta_1) & 0 & 0 & \cdots & 0 & 0 \\
+\sin(m\theta_1) & \cos(m\theta_1) & 0 & 0 & \cdots & 0 & 0 \\
+0 & 0 & \cos(m\theta_2) & -\sin(m\theta_2) & \cdots & 0 & 0 \\
+0 & 0 & \sin(m\theta_2) & \cos(m\theta_2) & \cdots & 0 & 0 \\
+\vdots & \vdots & \vdots & \vdots & \ddots & \vdots & \vdots \\
+0 & 0 & 0 & 0 & \cdots & \cos(m\theta_{d/2}) & -\sin(m\theta_{d/2}) \\
+0 & 0 & 0 & 0 & \cdots & \sin(m\theta_{d/2}) & \cos(m\theta_{d/2})
+\end{bmatrix}
+$$
+
+Each 2×2 block along the diagonal is a rotation matrix:
+
+$$
+R(m\theta_i) = 
+\begin{bmatrix}
+\cos(m\theta_i) & -\sin(m\theta_i) \\
+\sin(m\theta_i) & \cos(m\theta_i)
+\end{bmatrix}
+$$
+
+The block-diagonal structure means each pair of dimensions $(2i-1, 2i)$ is rotated independently by angle $m\theta_i$.
+
 3. **end for**
 4. $Q \leftarrow [R^d_{\Theta,1} W_q X[:,1], R^d_{\Theta,2} W_q X[:,2], \ldots, R^d_{\Theta,\ell_x} W_q X[:,\ell_x]]$ $\triangleright$ Apply rotation to queries
 5. $K \leftarrow [R^d_{\Theta,1} W_k Z[:,1], R^d_{\Theta,2} W_k Z[:,2], \ldots, R^d_{\Theta,\ell_z} W_k Z[:,\ell_z]]$ $\triangleright$ Apply rotation to keys
@@ -109,10 +137,45 @@ RoFormer **eliminates** separate position embedding and instead modifies the att
 
 **Key differences from Formal Algorithms Algorithm 4:**
 - **Line 4-5:** Instead of $Q \leftarrow W_q X + b_q \mathbf{1}^T$, we rotate: $Q \leftarrow [R^d_{\Theta,m} W_q X[:,m]]$
+- **No bias terms:** RoPE omits bias for Q and K projections ($b_q$ and $b_k$) because rotating a bias makes it position-dependent ($R_m b_q$ varies with $m$), which breaks the relative position property. The value projection can still use bias since it's not rotated.
 - No separate position embedding step (no Algorithm 2 equivalent)
 - Position information appears during attention computation, not in embeddings
-
 ---
+
+### Understanding θ_i: Multiple Rotation Frequencies
+
+In our 2D example, we used a single rotation angle $\theta = 1.0$. But for higher-dimensional embeddings (e.g., $d = 512$), RoPE uses **multiple rotation frequencies** $\theta_i$ for different dimension pairs.
+
+**The formula:**
+$$\theta_i = 10000^{-2i/d} \quad \text{for } i = 1, 2, \ldots, d/2$$
+
+This creates a geometric series:
+- $\theta_1 = 10000^{-2/d}$ → **slow rotation** (small angle per position)
+- $\theta_2 = 10000^{-4/d}$ → **medium rotation**
+- $\theta_{d/2} = 10000^{-1} = 0.0001$ → **fast rotation** (large angle per position)
+
+**Why multiple frequencies?**
+
+Different frequencies capture positional relationships at different scales:
+
+| Frequency | Rotation Speed | What It Captures |
+|-----------|---------------|------------------|
+| Low ($\theta_1$) | Slow, takes many positions to rotate significantly | **Long-range dependencies** - "this word is 50 tokens away" |
+| High ($\theta_{d/2}$) | Fast, rotates significantly between adjacent positions | **Local dependencies** - "these words are adjacent" |
+
+This is analogous to sinusoidal position embeddings having both low and high frequency components.
+
+**For our 2D example:** With $d=2$, we have only one dimension pair, so $i=1$ and:
+$$\theta_1 = 10000^{-2/2} = 10000^{-1} = 0.0001$$
+
+We simplified to $\theta = 1.0$ for illustration, but the actual RoFormer implementation would use $\theta_1 = 0.0001$.
+
+**Extending to 4D:**
+If we had $d=4$, we'd have two rotation frequencies:
+- Dimensions 1-2: rotated by $\theta_1 = 10000^{-2/4} = 0.01$
+- Dimensions 3-4: rotated by $\theta_2 = 10000^{-4/4} = 0.0001$
+
+The first pair rotates more slowly (captures longer-range patterns), while the second rotates faster (captures local patterns).
 
 ## A Simple Concrete Example: "The Cat Chased The Mouse"
 
