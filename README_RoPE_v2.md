@@ -1,8 +1,8 @@
 # RoFormer: Enhanced Transformer with Rotary Position Embedding
 
-**Presenters:** [Your Name]  
+**Presenters:** Charlee Kraiss  
 **Course:** DS 5690-01 Gen AI Models in Theory and Practice (2025F)  
-**Date:** [Presentation Date]
+**Date:** 30 - Oct - 2025
 
 ---
 
@@ -144,7 +144,7 @@ The block-diagonal structure means each pair of dimensions $(2i-1, 2i)$ is rotat
 
 ### Understanding θ_i: Multiple Rotation Frequencies
 
-In our 2D example, we used a single rotation angle $\theta = 1.0$. But for higher-dimensional embeddings (e.g., $d = 512$), RoPE uses **multiple rotation frequencies** $\theta_i$ for different dimension pairs.
+In our 2D example, we will use a simplified single rotation angle $\theta = 1.0$. But for higher-dimensional embeddings (e.g., $d = 512$), RoPE uses **multiple rotation frequencies** $\theta_i$ for different dimension pairs.
 
 **The formula:**
 $$\theta_i = 10000^{-2i/d} \quad \text{for } i = 1, 2, \ldots, d/2$$
@@ -225,25 +225,33 @@ After W_k projection: k = [0.9, 0.4]
 
 **Step 3: Rotate queries and keys by their position**
 
-For "cat" at position $m = 2$:
+For "cat" at position m=2:
+- Rotation angle = 2×θ=2×1.0=2.0 radians
+- Rotation matrix R₂: 
 
-Rotation angle = $2 \times \theta = 2 \times 1.0 = 2.0$ radians
+$$
+R_2 = \begin{bmatrix} \cos(2.0) & -\sin(2.0) \\ \sin(2.0) & \cos(2.0) \end{bmatrix} = \begin{bmatrix} -0.416 & -0.909 \\ 0.909 & -0.416 \end{bmatrix}
+$$
 
-Rotation matrix $R_2$:
-$$R_2 = \begin{bmatrix} \cos(2.0) & -\sin(2.0) \\ \sin(2.0) & \cos(2.0) \end{bmatrix} = \begin{bmatrix} -0.416 & -0.909 \\ 0.909 & -0.416 \end{bmatrix}$$
+Rotated query for "cat": 
 
-Rotated query for "cat":
-$$q_2 = R_2 \times \begin{bmatrix} 0.9 \\ 0.4 \end{bmatrix} = \begin{bmatrix} -0.738 \\ 0.652 \end{bmatrix}$$
+$$
+q_2 = R_2 \begin{bmatrix} 0.9 \\ 0.4 \end{bmatrix} = \begin{bmatrix} -0.738 \\ 0.652 \end{bmatrix}
+$$
 
-For "mouse" at position $n = 5$:
+For "mouse" at position n=5:
+- Rotation angle = 5×1.0=5.0 radians
+- Rotation matrix R₅: 
 
-Rotation angle = $5 \times 1.0 = 5.0$ radians
+$$
+R_5 = \begin{bmatrix} \cos(5.0) & -\sin(5.0) \\ \sin(5.0) & \cos(5.0) \end{bmatrix} = \begin{bmatrix} 0.284 & 0.959 \\ -0.959 & 0.284 \end{bmatrix}
+$$
 
-Rotation matrix $R_5$:
-$$R_5 = \begin{bmatrix} \cos(5.0) & -\sin(5.0) \\ \sin(5.0) & \cos(5.0) \end{bmatrix} = \begin{bmatrix} 0.284 & 0.959 \\ -0.959 & 0.284 \end{bmatrix}$$
+Rotated key for "mouse": 
 
-Rotated key for "mouse":
-$$k_5 = R_5 \times \begin{bmatrix} 0.3 \\ 0.7 \end{bmatrix} = \begin{bmatrix} 0.756 \\ -0.089 \end{bmatrix}$$
+$$
+k_5 = R_5 \begin{bmatrix} 0.3 \\ 0.7 \end{bmatrix} = \begin{bmatrix} 0.756 \\ -0.089 \end{bmatrix}
+$$
 
 **Step 4: Compute attention from "cat" to "mouse"**
 
@@ -504,13 +512,13 @@ Models using RoPE with linear attention:
 
 **Answer:** YES, they would have the same positional relationship!
 
-**Why:** Both pairs have a relative distance of 1:
-- "cat" to "chased": position $3 - 2 = 1$
-- "the" to "mouse": position $5 - 4 = 1$
+Why: Both pairs have a relative distance of 1:
+* "cat" to "chased": position 3−2=1
+* "the" to "mouse": position 5−4=1
 
 In RoFormer, the attention computation depends on:
 
-$$R^d_{\Theta,m}^T R^d_{\Theta,n} = R^d_{\Theta,n-m}$$
+$$R_{\Theta,m}^{d\,T} R_{\Theta,n}^d = R_{\Theta,n-m}^d$$
 
 For both pairs, $(n - m) = 1$, so they get the same rotation difference, meaning:
 - The geometric relationship between their query and key vectors is identical
