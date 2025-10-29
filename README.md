@@ -100,6 +100,15 @@ Position information enters **during** attention computation, not **before** it!
 
 ---
 
+<details>
+<summary>⚠️ Fair warning before we dive in...</summary>
+
+![Math Ahead Warning](warning-math.png)
+
+</details>
+
+---
+
 ## Architecture: RoPE Attention Algorithm
 
 Modified from Formal Algorithms Algorithm 4:
