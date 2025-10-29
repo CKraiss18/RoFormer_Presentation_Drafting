@@ -111,8 +111,8 @@ Modified from Formal Algorithms Algorithm 4:
 - $\tilde{X} \in \mathbb{R}^{d_{\text{out}} \times \ell_x}$, updated representations
 
 **Parameters:** 
-- $W_q \in \mathbb{R}^{d_{\text{attn}} \times d_x}$, $b_q \in \mathbb{R}^{d_{\text{attn}}}$
-- $W_k \in \mathbb{R}^{d_{\text{attn}} \times d_z}$, $b_k \in \mathbb{R}^{d_{\text{attn}}}$
+- $W_q \in \mathbb{R}^{d_{\text{attn}} \times d_x}$ (no $b_q$ with RoPE)
+- $W_k \in \mathbb{R}^{d_{\text{attn}} \times d_z}$ (no $b_k$ with RoPE)
 - $W_v \in \mathbb{R}^{d_{\text{out}} \times d_z}$, $b_v \in \mathbb{R}^{d_{\text{out}}}$
 
 **Hyperparameters:** 
@@ -149,10 +149,21 @@ $$
 The block-diagonal structure means each pair of dimensions $(2i-1, 2i)$ is rotated independently by angle $m\theta_i$.
 
 2. **end for**
-3. $Q \leftarrow [R^d_{\Theta,1} W_q X[:,1], R^d_{\Theta,2} W_q X[:,2], \ldots, R^d_{\Theta,\ell_x} W_q X[:,\ell_x]]$ $\triangleright$ Apply rotation to queries
+3. $Q \leftarrow [R^d_{\Theta,1} W_q X[:,1], R^d_{\Theta,2} W_q X[:,2], \ldots, R^d_{\Theta,\ell_x} W_q X[:,\ell_x]]$ $\triangleright$ Apply rotation to queries and concatenate
+
+**How Q is Built Column by Column:**
+
+$$
+Q = \begin{bmatrix} 
+| & | & | & | & | \\ 
+R_1(W_q X[:,1]) & R_2(W_q X[:,2]) & R_3(W_q X[:,3]) & R_4(W_q X[:,4]) & R_5(W_q X[:,5]) \\ 
+| & | & | & | & | 
+\end{bmatrix}
+$$
+
 4. $K \leftarrow [R^d_{\Theta,1} W_k Z[:,1], R^d_{\Theta,2} W_k Z[:,2], \ldots, R^d_{\Theta,\ell_z} W_k Z[:,\ell_z]]$ $\triangleright$ Apply rotation to keys
 5. $V \leftarrow W_v Z + b_v \mathbf{1}^T$ $\triangleright$ Values NOT rotated
-6. $S \leftarrow Q^T K$ $\triangleright$ Compute attention scores
+6. $S \leftarrow Q^T K$ $\triangleright$ Compute attention scores *Relative Position Magic Here!*
 7. Apply masking to $S$ if needed
 8. **return** $\tilde{X} \leftarrow V \cdot \text{softmax}(S / \sqrt{d_{\text{attn}}})$
 
@@ -166,7 +177,7 @@ The block-diagonal structure means each pair of dimensions $(2i-1, 2i)$ is rotat
 
 ## Understanding θ_i: Multiple Rotation Frequencies
 
-In our concrete example below, we'll use a simplified single rotation angle $\theta = 1.0$. But for higher-dimensional embeddings (e.g., $d = 512$), RoPE uses **multiple rotation frequencies** $\theta_i$ for different dimension pairs.
+In our concrete example below, we'll use **$d = 4$ dimensions with two rotation frequencies** to demonstrate how multiple frequencies work. For production models with higher-dimensional embeddings (e.g., $d = 512$ or $d = 768$), RoPE uses even more rotation frequencies - one $\theta_i$ for each dimension pair.
 
 **The formula:**
 $$\theta_i = 10000^{-2i/d} \quad \text{for } i = 1, 2, \ldots, d/2$$
@@ -203,7 +214,7 @@ The first pair rotates more slowly (captures longer-range patterns), while the s
 
 ## Concrete Example: "The Cat Chased The Mouse"
 
-Let's walk through **"the cat chased the mouse"** with actual numbers to see exactly how RoPE works.
+Let's walk through **"the cat chased the mouse"** with actual numbers to see exactly how RoPE works with multiple rotation frequencies.
 
 ### Setup
 - **Sentence:** "the cat chased the mouse"
@@ -213,24 +224,28 @@ Let's walk through **"the cat chased the mouse"** with actual numbers to see exa
   - "chased" = position 3
   - "the" = position 4
   - "mouse" = position 5
-- **Simplified dimensions:** $d = 2$ (instead of 768+)
-- **Rotation angle:** $\theta = 1.0$ radian (instead of varying $\theta_i$)
+- **Dimensions:** $d = 4$ (instead of 768+, but showing the multi-frequency concept)
+- **Rotation frequencies:** 
+  - $\theta_1 = 10000^{-2/4} = 0.01$ (slow rotation for dimensions 1-2)
+  - $\theta_2 = 10000^{-4/4} = 0.0001$ (fast rotation for dimensions 3-4)
 
 ### Step 1: Token Embeddings (Before Any Position Information)
 
-Imagine these are learned 2D embeddings for each word:
+Imagine these are learned 4D embeddings for each word:
 
 $$
 X = 
 \begin{bmatrix}
 0.5 & 0.9 & 0.2 & 0.5 & 0.3 \\
-0.3 & 0.4 & 0.8 & 0.3 & 0.7
+0.3 & 0.4 & 0.8 & 0.3 & 0.7 \\
+0.6 & 0.6 & 0.5 & 0.4 & 0.4 \\
+0.2 & 0.3 & 0.7 & 0.6 & 0.8
 \end{bmatrix}
 $$
 
 Where columns represent: ["the", "cat", "chased", "the", "mouse"]
 
-**Note:** These embeddings contain NO position information yet!
+**Note:** These embeddings contain NO position information yet! Each token is a 4D point in embedding space.
 
 ### Step 2: Apply Linear Transformations (Still No Position)
 
@@ -243,87 +258,224 @@ In practice, $W_q$ and $W_k$ are learned weight matrices.
 
 ### Step 3: Rotate queries and keys by their position
 
+**Using d = 4 dimensions with two rotation frequencies:**
+
+Recall that different dimension pairs rotate at different speeds:
+- **Pair 1** (dimensions 1-2): Rotates by $m\theta_1 = m \times 0.01$ radians
+- **Pair 2** (dimensions 3-4): Rotates by $m\theta_2 = m \times 0.0001$ radians
+
 **For "cat" at position $m = 2$:**
 
-Rotation angle: $2 \times \theta = 2 \times 1.0 = 2.0$ radians
+Rotation angles:
+- Dimensions 1-2: $2 \times 0.01 = 0.02$ radians
+- Dimensions 3-4: $2 \times 0.0001 = 0.0002$ radians
 
-Rotation matrix $R_2$:
+Rotation matrix $R_2$ (4×4 block-diagonal):
 
 $$
-R_2 = \begin{bmatrix} \cos(2.0) & -\sin(2.0) \\ \sin(2.0) & \cos(2.0) \end{bmatrix} = \begin{bmatrix} -0.416 & -0.909 \\ 0.909 & -0.416 \end{bmatrix}
+R_2 = \begin{bmatrix}
+\cos(0.02) & -\sin(0.02) & 0 & 0 \\
+\sin(0.02) & \cos(0.02) & 0 & 0 \\
+0 & 0 & \cos(0.0002) & -\sin(0.0002) \\
+0 & 0 & \sin(0.0002) & \cos(0.0002)
+\end{bmatrix} \approx \begin{bmatrix}
+0.9998 & -0.0200 & 0 & 0 \\
+0.0200 & 0.9998 & 0 & 0 \\
+0 & 0 & 1.0000 & -0.0002 \\
+0 & 0 & 0.0002 & 1.0000
+\end{bmatrix}
 $$
+
+**Notice:** 
+- **First 2×2 block** (slow $\theta_1$): Small but visible rotation (≈1.1°)
+- **Second 2×2 block** (fast $\theta_2$): Barely rotated at all! (≈0.01°)
 
 Rotated query for "cat":
 
 $$
-q_2 = R_2 \begin{bmatrix} 0.9 \\ 0.4 \end{bmatrix} = \begin{bmatrix} -0.738 \\ 0.652 \end{bmatrix}
+q_2 = R_2 \begin{bmatrix} 0.9 \\ 0.4 \\ 0.6 \\ 0.3 \end{bmatrix} = \begin{bmatrix} 0.8918 \\ 0.4179 \\ 0.5999 \\ 0.3001 \end{bmatrix}
+$$
+
+**For "chased" at position $n = 3$:**
+
+Rotation angles:
+- Dimensions 1-2: $3 \times 0.01 = 0.03$ radians
+- Dimensions 3-4: $3 \times 0.0001 = 0.0003$ radians
+
+Rotation matrix $R_3$:
+
+$$
+R_3 \approx \begin{bmatrix}
+0.9996 & -0.0300 & 0 & 0 \\
+0.0300 & 0.9996 & 0 & 0 \\
+0 & 0 & 1.0000 & -0.0003 \\
+0 & 0 & 0.0003 & 1.0000
+\end{bmatrix}
+$$
+
+Rotated key for "chased":
+
+$$
+k_3 = R_3 \begin{bmatrix} 0.2 \\ 0.8 \\ 0.5 \\ 0.7 \end{bmatrix} = \begin{bmatrix} 0.1759 \\ 0.8059 \\ 0.4998 \\ 0.7002 \end{bmatrix}
 $$
 
 **For "mouse" at position $n = 5$:**
 
-Rotation angle: $5 \times 1.0 = 5.0$ radians
+Rotation angles:
+- Dimensions 1-2: $5 \times 0.01 = 0.05$ radians  
+- Dimensions 3-4: $5 \times 0.0001 = 0.0005$ radians
 
 Rotation matrix $R_5$:
 
 $$
-R_5 = \begin{bmatrix} \cos(5.0) & -\sin(5.0) \\ \sin(5.0) & \cos(5.0) \end{bmatrix} = \begin{bmatrix} 0.284 & 0.959 \\ -0.959 & 0.284 \end{bmatrix}
+R_5 \approx \begin{bmatrix}
+0.9988 & -0.0500 & 0 & 0 \\
+0.0500 & 0.9988 & 0 & 0 \\
+0 & 0 & 1.0000 & -0.0005 \\
+0 & 0 & 0.0005 & 1.0000
+\end{bmatrix}
 $$
+
+**Notice:** 
+- **First block**: More rotation than positions 2 or 3 (≈2.9°)
+- **Second block**: Still barely rotated! (≈0.03°) Fast $\theta$ means slow angle growth
 
 Rotated key for "mouse":
 
 $$
-k_5 = R_5 \begin{bmatrix} 0.3 \\ 0.7 \end{bmatrix} = \begin{bmatrix} 0.756 \\ -0.089 \end{bmatrix}
+k_5 = R_5 \begin{bmatrix} 0.3 \\ 0.7 \\ 0.4 \\ 0.8 \end{bmatrix} = \begin{bmatrix} 0.2646 \\ 0.7137 \\ 0.3996 \\ 0.8002 \end{bmatrix}
 $$
 
-### Step 4: Compute Attention Score
+### Visualization: Multi-Frequency Rotation
 
-The attention score from "cat" to "mouse":
+We can visualize each 2D subspace separately:
 
-$$q_2^T k_5 = (-0.738)(0.756) + (0.652)(-0.089) = -0.558 - 0.058 = -0.616$$
+**Dimensions 1-2 (slow rotation, $\theta_1 = 0.01$):**
+```
+        North
+            ↑
+            |   • mouse (0.05 rad ≈ 2.9°)
+            |  /
+            | / • chased (0.03 rad ≈ 1.7°)
+            |/ • cat (0.02 rad ≈ 1.1°)
+West ←------O------→ East
+            |
+         Start
+```
+Small angles → all tokens still relatively close together in this subspace.
+
+**Dimensions 3-4 (fast rotation, $\theta_2 = 0.0001$):**
+```
+        North
+            ↑
+            | • all tokens (0.0002-0.0005 rad)
+            | clustered extremely close
+            |
+West ←------O------→ East
+            |
+         Start
+```
+Tiny angles → tokens barely rotated at all! These dimensions maintain similarity even for "distant" tokens at these positions.
+
+**Key insight:** The two subspaces capture position information at different scales!
+
+### Step 4: Compute Attention Scores
+
+**"cat" → "chased" (adjacent, distance = 1):**
+
+$$q_2^T k_3 = (0.8918)(0.1759) + (0.4179)(0.8059) + (0.5999)(0.4998) + (0.3001)(0.7002)$$
+
+$$= 0.157 + 0.337 + 0.300 + 0.210 = 1.004$$
+
+**"cat" → "mouse" (distant, distance = 3):**
+
+$$q_2^T k_5 = (0.8918)(0.2646) + (0.4179)(0.7137) + (0.5999)(0.3996) + (0.3001)(0.8002)$$
+
+$$= 0.236 + 0.298 + 0.240 + 0.240 = 1.014$$
+
+### Key Observations About These Scores
+
+**Both scores are positive and relatively high!** At first this might seem surprising, but here's why:
+
+1. **Fast-rotating dimensions (3-4)** barely changed between positions:
+   - Position 2: 0.0002 radians
+   - Position 5: 0.0005 radians
+   - These dimensions maintain strong similarity across all these positions
+   - They contribute positively to both attention scores
+
+2. **Slow-rotating dimensions (1-2)** show more differentiation:
+   - Adjacent tokens: 0.01 radian difference → still well-aligned
+   - Distant tokens: 0.03 radian difference → slightly less aligned
+   - **This is where the decay begins!**
+
+3. **At much longer distances** (e.g., distance = 50), the decay becomes dramatic:
+   - Slow dims: $50 \times 0.01 = 0.5$ radians (≈29°) → significant misalignment
+   - Fast dims: $50 \times 0.0001 = 0.005$ radians (≈0.3°) → still mostly aligned
+   - Now slow dimensions contribute negatively or weakly
+
+### The Multi-Frequency Insight
+
+This demonstrates **why RoPE uses multiple rotation frequencies**:
+
+- **Slow $\theta_1$** (dimensions 1-2): Sensitive to position differences, even at short range. Captures that "cat" and "mouse" are separated.
+
+- **Fast $\theta_2$** (dimensions 3-4): Maintains similarity across these short distances. Useful for capturing that both tokens are in the same local context (same sentence).
+
+**The model learns during training which frequency to rely on for different linguistic patterns!**
 
 ### The Key Property: Only Relative Distance Matters
 
-This attention score depends on:
-1. The token embeddings ($x_{\text{cat}}$ and $x_{\text{mouse}}$)
-2. The **relative distance**: $5 - 2 = 3$
+For "cat" → "mouse", the attention computation uses:
 
-**NOT** on the absolute positions 2 and 5!
+$$R_2^T R_5 = R_{5-2} = R_3$$
 
-**Why?** Because of the rotation matrix property:
+This means the rotation is by the **relative distance** of 3 positions:
+- Dimensions 1-2: $3 \times 0.01 = 0.03$ radians
+- Dimensions 3-4: $3 \times 0.0001 = 0.0003$ radians
 
-$${R_{\Theta,m}^d}^T R_{\Theta,n}^d = R_{\Theta,n-m}^d$$
+**This relative rotation is identical for ANY two tokens 3 positions apart**, regardless of their absolute positions!
 
-So when computing attention:
+**Example:** 
+- Tokens at positions (2, 5): relative rotation = $R_3$
+- Tokens at positions (10, 13): relative rotation = $R_3$
+- Tokens at positions (100, 103): relative rotation = $R_3$
 
-$$q_m^T k_n = (R_m W_q x_m)^T (R_n W_k x_n) = x_m^T W_q^T R_m^T R_n W_k x_n$$
+All three pairs get the **same positional relationship** encoded!
 
-Due to the property of rotation matrices:
-$$R_m^T R_n = R_{(n-m)}$$
+### Comparing Attention Across Different Distances
 
-For "cat" → "mouse": $R_2^T R_5 = R_3$ (rotated by the **relative distance** of 3!)
-
-**The attention score only depends on:**
-1. The token embeddings $x_{\text{cat}}$ and $x_{\text{mouse}}$
-2. The **relative distance** $(5-2) = 3$
-
-### Why This Matters: Nearby vs Distant Tokens
-
-Let's compare attention scores at different distances:
+Let's trace how attention changes as distance increases:
 
 **Distance 1 (adjacent tokens):**
-- "cat" (pos 2) → "chased" (pos 3): Relative rotation = $(3-2)\theta = 1.0$ radian
-- Small angle → vectors remain relatively aligned → **large attention score**
+- Slow dims: $1 \times 0.01 = 0.01$ rad (0.6°) → barely rotated → **strong contribution**
+- Fast dims: $1 \times 0.0001 = 0.0001$ rad (0.006°) → essentially identical → **strong contribution**
+- **Result: HIGH total attention** (as we computed: 1.004)
 
-**Distance 3 (distant tokens):**
-- "cat" (pos 2) → "mouse" (pos 5): Relative rotation = $(5-2)\theta = 3.0$ radians
-- Large angle → vectors rotated far apart → **smaller attention score** (as we computed: -0.616)
+**Distance 3 (our example):**
+- Slow dims: $3 \times 0.01 = 0.03$ rad (1.7°) → slight rotation → **moderate contribution**
+- Fast dims: $3 \times 0.0001 = 0.0003$ rad (0.02°) → barely changed → **strong contribution**
+- **Result: STILL HIGH attention** (as we computed: 1.014)
 
-**Distance 0 (same position, self-attention):**
-- "cat" → "cat": Relative rotation = $(2-2)\theta = 0$ radians
-- No rotation → maximum alignment → **largest attention score**
+**Distance 50 (far apart):**
+- Slow dims: $50 \times 0.01 = 0.5$ rad (29°) → significant rotation → **weak or negative contribution**
+- Fast dims: $50 \times 0.0001 = 0.005$ rad (0.3°) → noticeable but small → **moderate contribution**
+- **Result: LOWER total attention**
 
-This is the **long-term decay property** - distant words naturally get less attention due to larger rotation angles!
+**Distance 500 (extremely far):**
+- Slow dims: $500 \times 0.01 = 5.0$ rad (286°) → nearly opposite direction → **negative contribution!**
+- Fast dims: $500 \times 0.0001 = 0.05$ rad (3°) → finally noticeable → **weakening contribution**
+- **Result: VERY LOW or negative attention**
 
+### Why This Matters: Long-Term Decay Property
+
+This is the **long-term decay property** in action:
+
+- **Short distances:** Both frequency bands contribute positively → strong attention
+- **Medium distances:** Slow frequencies start diverging → moderate attention  
+- **Long distances:** Slow frequencies oppose, fast frequencies weaken → low attention
+- **Very long distances:** Both frequency bands contribute weakly or negatively → minimal attention
+
+**The decay happens naturally and automatically** across multiple scales, without any explicit distance penalty! The model learns to use different frequency bands for different linguistic relationships during training.
 ---
 
 ## Question 1: Sequence Length Flexibility
@@ -541,10 +693,26 @@ RoPE has become the **de facto standard** for position encoding in modern large 
 - Experiments show same performance reached in **fewer training steps**
 - Lower compute costs for pre-training
 
+**Evaluated on:**
+- Masked Language Modeling (MLM) on Chinese Wikipedia corpus
+- Compared training curves against BERT baseline
+
 **2. Superior Performance on Long Text Tasks**
+
+**The authors report:** "The experimental results show that our proposed RoFormer can achieve better performance on long texts task."
+
 - **+1.5% accuracy** on CAIL2019-SCM (Chinese legal document classification) with 1024-token context vs 512
-- Performance continues **improving** as sequence length increases (not true for traditional approaches)
 - **+0.2 BLEU** improvement on WMT 2014 En-De machine translation
+- Performance continues **improving** as sequence length increases (not true for traditional approaches)
+
+**Tasks evaluated:**
+- **Machine Translation:** WMT 2014 English-to-German (seq-to-seq, handles variable-length inputs/outputs)
+- **Long Text Classification:** CAIL2019-SCM Chinese legal case judgment prediction (documents 512-1024 tokens)
+- **Question Answering:** CMRC 2018 Chinese machine reading comprehension
+- **Natural Language Inference:** XNLI cross-lingual inference tasks
+- **Sentiment Analysis:** ChnSentiCorp Chinese sentiment classification
+
+**Key finding:** RoPE's advantage increases with sequence length, particularly evident on Chinese long-text tasks where documents exceed 512 tokens.
 
 **3. Length Generalization (Enabled by Relative Encoding)**
 - Train on 512-token sequences
@@ -555,7 +723,6 @@ RoPE has become the **de facto standard** for position encoding in modern large 
 - RoPE works with $O(N)$ linear attention mechanisms
 - Traditional additive encoding breaks linear attention decomposition
 - Critical for scaling to 100K+ token contexts
-
 ### Core Architectural Properties
 
 **1. Explicit Relative Position Encoding**
@@ -617,7 +784,6 @@ This methodology contrasts with trial-and-error architecture search and influenc
 - **Geometric inductive biases:** Opens questions about other geometric transformations
 
 ---
-
 ## Critical Analysis
 
 ### What Was Overlooked or Could Be Developed Further?
@@ -626,7 +792,12 @@ This methodology contrasts with trial-and-error architecture search and influenc
 
 The paper shows RoFormer converges faster than BERT empirically (Figure 3), but doesn't provide deep theoretical explanation of WHY. They prove long-term decay (Section 3.4.3) but don't connect this to optimization dynamics.
 
-**Potential development:** Analyze the loss landscape properties that RoPE induces. Does the explicit relative position structure create smoother gradients?
+**The authors explicitly acknowledge this limitation (Section 4.5.5):** "Although we have proved that our model has favourable property of long-term decay for inter-token products, Section (3.3), which is similar to the existing position encoding mechanisms, our model shows superior performance on long texts than peer models, we have not come up with a faithful explanation."
+
+**What they prove:** Long-term decay property exists  
+**What remains unexplained:** Why this property leads to faster convergence and better long-text performance
+
+**Potential development:** Analyze the loss landscape properties that RoPE induces. Does the explicit relative position structure create smoother gradients? Does the multiplicative encoding create better conditioning for optimization?
 
 **2. Interaction with Different Attention Patterns**
 
@@ -635,26 +806,55 @@ The paper briefly mentions sparse attention (GPT-3 uses it) but doesn't deeply e
 - Sliding window attention  
 - Block-sparse attention
 
+Given that RoPE naturally creates position-dependent attention scores, understanding its interaction with attention pattern constraints could reveal optimization opportunities.
+
 **3. Extension to Other Modalities**
 
 RoPE is derived for sequential 1D data. What about:
 - 2D positional encoding for images (where position is $(x, y)$)?
-- 3D for video $(x, y, t)$?
+- 3D for video $(x, y, t)$)?
 - Graph structures where "position" is less clear?
 
-**Subsequent work** (e.g., RoPE-2D) has begun addressing this.
+**The authors note:** "The experimental results also show that our proposed RoFormer can achieve better performance on long texts task" but don't explore whether this extends to other structured data types.
+
+**Subsequent work** (e.g., RoPE-2D, RoPE-3D) has begun addressing this, showing the core principle generalizes beyond 1D sequences.
 
 **4. Computational Overhead Not Fully Analyzed**
 
-While they provide efficient implementation (Section 3.4.2), they don't benchmark actual wall-clock time vs traditional approaches at scale.
+While they provide efficient implementation (Section 3.4.2), they don't benchmark actual wall-clock time vs traditional approaches at scale. Questions remain:
+- What is the actual throughput (tokens/second) compared to additive encoding?
+- Does the 2× theoretical operation count translate to 2× wall-clock time, or do optimizations close this gap?
+- At what sequence length does the overhead become prohibitive?
 
 ### Errors or Disputed Findings?
 
-**No major errors found.** The mathematical derivation is sound.
+**No major errors found.** The mathematical derivation is sound and the experimental results are reproducible.
 
-**Limitation acknowledged by authors** (Section 4.5.5): They note they lack "thorough explanations on why it converges faster" and why it performs better on long texts beyond the decay property.
+**Key limitation acknowledged by authors** (Section 4.5.5): They note they lack "thorough explanations on why it converges faster" and why it performs better on long texts beyond the decay property. This is an important gap between empirical success and theoretical understanding.
 
-**Subsequent work** (ALiBi, 2021) has shown even simpler approaches can work well, suggesting RoPE may not be the only solution - but it remains the most widely adopted.
+**Open question:** The paper claims RoPE has "sequence length no constraint" due to relative position encoding, but practical limits exist:
+- Numerical precision at extreme sequence lengths (e.g., 1M+ tokens)
+- Does the decay property remain beneficial at all scales?
+- Are there sequence lengths where the approximation breaks down?
+
+**Subsequent work** (ALiBi, 2021) has shown even simpler approaches can work well, suggesting RoPE may not be the only solution - but it remains the most widely adopted, likely due to its principled mathematical foundation and strong empirical results.
+
+### What Makes This Work Strong Despite Limitations
+
+**1. Principle-Driven Design**
+- Started with desired property (relative position dependency)
+- Derived solution from first principles  
+- Created reproducible methodology for future work
+
+**2. Empirical Validation Across Tasks**
+- Machine translation, language modeling, long-text classification
+- Consistent improvements across diverse benchmarks
+
+**3. Practical Impact**
+- Widely adopted in production systems (LLaMA, PaLM, GPT-NeoX)
+- Enabled real-world long-context applications
+
+The gap between "we know it works" and "we know why it works" is not unique to this paper - it reflects a broader challenge in deep learning research. RoFormer's contribution is providing a solution that is both theoretically motivated AND empirically successful.
 
 ---
 
