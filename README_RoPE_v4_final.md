@@ -174,7 +174,6 @@ $$
 - Position information appears during attention computation, not in embeddings
 
 ---
-
 ## Understanding θ_i: Multiple Rotation Frequencies
 
 In our concrete example below, we'll use **$d = 4$ dimensions with two rotation frequencies** to demonstrate how multiple frequencies work. For production models with higher-dimensional embeddings (e.g., $d = 512$ or $d = 768$), RoPE uses even more rotation frequencies - one $\theta_i$ for each dimension pair.
@@ -182,33 +181,41 @@ In our concrete example below, we'll use **$d = 4$ dimensions with two rotation 
 **The formula:**
 $$\theta_i = 10000^{-2i/d} \quad \text{for } i = 1, 2, \ldots, d/2$$
 
-This creates a geometric series:
-- $\theta_1 = 10000^{-2/d}$ → **slow rotation** (small angle per position)
-- $\theta_2 = 10000^{-4/d}$ → **medium rotation**
-- $\theta_{d/2} = 10000^{-1} = 0.0001$ → **fast rotation** (large angle per position)
+This creates a geometric series where each frequency is smaller than the last.
 
-**Why multiple frequencies?**
+**For our 4D example ($d=4$):**
 
-Different frequencies capture positional relationships at different scales:
+We have two dimension pairs, so two rotation frequencies:
 
-| Frequency | Rotation Speed | What It Captures |
-|-----------|---------------|------------------|
-| Low ($\theta_1$) | Slow, takes many positions to rotate significantly | **Long-range dependencies** - "this word is 50 tokens away" |
-| High ($\theta_{d/2}$) | Fast, rotates significantly between adjacent positions | **Local dependencies** - "these words are adjacent" |
+- $\theta_1 = 10000^{-2/4} = 10000^{-0.5} = 0.01$ → **slow rotation** (dimensions 1-2)
+- $\theta_2 = 10000^{-4/4} = 10000^{-1} = 0.0001$ → **fast rotation** (dimensions 3-4)
+
+**What "slow" and "fast" mean:**
+
+| Dimension Pair | What It Captures | Example |
+|----------------|------------------|---------|
+| 1-2 (θ₁ = 0.01) | **Long-range dependencies** - distinguishes "this word is 50 tokens away" from "this word is 5 tokens away" | Knows "the **cat**" vs "the **mouse**" are different noun phrases |
+| 3-4 (θ₂ = 0.0001) | **Local dependencies** - maintains similarity even across moderate distances, captures local context | Knows "the", "cat", "chased", "the", "mouse" are all in **the same sentence/clause** |
+
+**Concrete angles in our example:**
+
+At position 5 ("mouse"):
+- Dimensions 1-2: $5 \times 0.01 = 0.05$ radians ≈ 2.9° (noticeable rotation)
+- Dimensions 3-4: $5 \times 0.0001 = 0.0005$ radians ≈ 0.03° (barely rotated!)
 
 This is analogous to sinusoidal position embeddings having both low and high frequency components.
 
-**For our 2D example:** With $d=2$, we have only one dimension pair, so $i=1$ and:
-$$\theta_1 = 10000^{-2/2} = 10000^{-1} = 0.0001$$
+**Scaling to higher dimensions:**
 
-We simplified to $\theta = 1.0$ for illustration, but the actual RoFormer implementation would use $\theta_1 = 0.0001$.
+For $d = 512$ (like GPT-2), we'd have **256 dimension pairs** with frequencies:
+- $\theta_1 = 10000^{-2/512} \approx 0.9048$ (very slow)
+- $\theta_2 = 10000^{-4/512} \approx 0.8187$
+- ...
+- $\theta_{256} = 10000^{-512/512} = 0.0001$ (very fast)
 
-**Extending to 4D:**
-If we had $d=4$, we'd have two rotation frequencies:
-- Dimensions 1-2: rotated by $\theta_1 = 10000^{-2/4} = 0.01$
-- Dimensions 3-4: rotated by $\theta_2 = 10000^{-4/4} = 0.0001$
+The geometric series ensures we capture position information at all scales, from immediate adjacency to long-range dependencies.
 
-The first pair rotates more slowly (captures longer-range patterns), while the second rotates faster (captures local patterns).
+**Why this matters:** Different linguistic patterns operate at different distances. Word pairs like "the cat" need local position info, while coreference like "John... he" may span 50+ tokens. Multiple frequencies let the model capture both!
 
 ---
 
@@ -423,6 +430,8 @@ This demonstrates **why RoPE uses multiple rotation frequencies**:
 
 **The model learns during training which frequency to rely on for different linguistic patterns!**
 
+More precisely: The rotation frequencies θᵢ are fixed, but the **learned weight matrices W_q and W_k determine how much each dimension pair contributes** to attention. By weighting certain dimensions more heavily, the model effectively learns which distance scales matter for different linguistic relationships.
+
 ### The Key Property: Only Relative Distance Matters
 
 For "cat" → "mouse", the attention computation uses:
@@ -598,9 +607,15 @@ $$R_m^T R_n = R_{-m} \cdot R_n = R_{n-m}$$
 
 When computing attention $q_m^T k_n$:
 
-$$q_m^T k_n = (R_m W_q x_m)^T (R_n W_k x_n) = x_m^T W_q^T \underbrace{R_m^T R_n}_{R_{(n-m)}} W_k x_n$$
+$$q_m^T k_n = (R_m W_q x_m)^T (R_n W_k x_n) = x_m^T W_q^T R_m^T R_n W_k x_n$$
 
-The rotations "compose" through matrix multiplication, and by the group property, $R_m^T R_n = R_{(n-m)}$.
+The rotations "compose" through matrix multiplication, and by the group property:
+
+$$R_m^T R_n = R_{(n-m)}$$
+
+So the attention becomes:
+
+$$q_m^T k_n = x_m^T W_q^T R_{(n-m)} W_k x_n$$
 
 **Result:** The attention score depends only on the **relative distance** $(n-m)$, not the absolute positions $m$ and $n$ individually!
 
@@ -609,6 +624,7 @@ The rotations "compose" through matrix multiplication, and by the group property
 With additive encoding, positions enter as simple vector addition:
 
 $$q_m = W_q(x_m + p_m)$$
+
 $$k_n = W_k(x_n + p_n)$$
 
 When we compute $q_m^T k_n$:
@@ -616,15 +632,21 @@ When we compute $q_m^T k_n$:
 $$q_m^T k_n = (W_q x_m + W_q p_m)^T (W_k x_n + W_k p_n)$$
 
 Expanding:
-$$= \underbrace{x_m^T W_q^T W_k x_n}_{\text{content-content}} + \underbrace{x_m^T W_q^T W_k p_n}_{\text{content-position}} + \underbrace{p_m^T W_q^T W_k x_n}_{\text{position-content}} + \underbrace{p_m^T W_q^T W_k p_n}_{\text{position-position}}$$
+
+$$= x_m^T W_q^T W_k x_n + x_m^T W_q^T W_k p_n + p_m^T W_q^T W_k x_n + p_m^T W_q^T W_k p_n$$
+
+We can label these four terms:
+1. **content-content:** $x_m^T W_q^T W_k x_n$
+2. **content-position:** $x_m^T W_q^T W_k p_n$
+3. **position-content:** $p_m^T W_q^T W_k x_n$
+4. **position-position:** $p_m^T W_q^T W_k p_n$
 
 **Four separate terms!** Each contains absolute positions $m$ and $n$ independently:
-- $p_m$ appears in two terms
-- $p_n$ appears in two terms
+- $p_m$ appears in terms 3 and 4
+- $p_n$ appears in terms 2 and 4
 - There's no automatic "cancellation" that leaves only $(n-m)$
 
 The model must **learn** to extract relative position from these mixed terms - it's not automatically encoded like with rotation.
-
 ### Mathematical Intuition: Why Group Structure Matters
 
 **Rotation:** A geometric transformation with algebraic structure
