@@ -155,7 +155,7 @@ R(m\theta_i) =
 \end{bmatrix}
 $$
 
-The block-diagonal structure means each pair of dimensions $(2i-1, 2i)$ is rotated independently by angle $m\theta_i$.
+The block-diagonal structure means each pair of dimensions $(2i-1, 2i)$ is rotated independently by angle $m\theta_i$. **A rotation in 2D space requires exactly 2 dimensions to define a plane** - you can't rotate a single number, you need two coordinates to rotate around. The zeros in the off-diagonal blocks ensure dimensions 1-2 never interact with dimensions 3-4, creating independent rotation planes.
 
 2. **end for**
 3. $Q \leftarrow [R^d_{\Theta,1} W_q X[:,1], R^d_{\Theta,2} W_q X[:,2], \ldots, R^d_{\Theta,\ell_x} W_q X[:,\ell_x]]$ $\triangleright$ Apply rotation to queries and concatenate
@@ -204,7 +204,17 @@ $$\theta_i = 10000^{-2i/d} \quad \text{for } i = 1, 2, \ldots, d/2$$
 - Dimensions 1-2: $5 \times 0.01 = 0.05$ radians ≈ 2.9° (noticeable)
 - Dimensions 3-4: $5 \times 0.0001 = 0.0005$ radians ≈ 0.03° (barely rotated!)
 
-Different linguistic patterns operate at different distances - "the cat" needs local info, while "John... he" may span 50+ tokens. Multiple frequencies capture both!
+**Scaling to 256 pairs:** With $d = 512$, you don't just have two extremes - you get a **smooth gradient** of 256 different rotation speeds, each capturing distance at a different scale:
+
+- **Pairs 1-50** (slowest): Rotate significantly across moderate distances → capture paragraph/section-level structure
+- **Pairs 51-100**: Rotate noticeably between sentences → capture sentence boundaries  
+- **Pairs 101-150**: Rotate within sentences → capture phrase structure ("the cat" vs "the mouse")
+- **Pairs 151-200**: Rotate between adjacent words → capture local syntax (article-noun pairs)
+- **Pairs 201-256** (fastest, like our θ₂): Barely rotate → maintain similarity across local context
+
+Think of it as having 256 different rulers: some measure kilometers (document structure), some measure meters (paragraphs), some measure inches (adjacent words). You need **all scales** to capture language structure at every level.
+
+Different linguistic patterns operate at different distances - "the cat" needs local info (pairs 200+), while "John... he" may span 50+ tokens (pairs 50-100). Multiple frequencies capture both!
 
 ---
 
@@ -344,36 +354,47 @@ $$
 
 ### Visualization: Multi-Frequency Rotation
 
-We can visualize each 2D subspace separately:
+Each token's embedding vector gets rotated by (position × θᵢ). We can visualize each 2D subspace:
+
+### Visualization: Multi-Frequency Rotation
+
+We can visualize how rotation works differently in each 2D subspace. Each token's embedding vector gets rotated by (position × θᵢ) radians.
 
 **Dimensions 1-2 (slow rotation, $\theta_1 = 0.01$):**
 ```
         North
             ↑
-            |   • mouse (0.05 rad ≈ 2.9°)
+            |   • mouse (rotated 0.05 rad ≈ 2.9°)
             |  /
-            | / • chased (0.03 rad ≈ 1.7°)
-            |/ • cat (0.02 rad ≈ 1.1°)
+            | / • chased (rotated 0.03 rad ≈ 1.7°)
+            |/ • cat (rotated 0.02 rad ≈ 1.1°)
 West ←------O------→ East
             |
-         Start
+         Start (position 0)
 ```
-Small angles → all tokens still relatively close together in this subspace.
+
+Each token starts with its embedding vector (based on word meaning), then gets rotated clockwise by its position × θ₁. These are **small angles** - even "mouse" at position 5 has only rotated 2.9° - but notice they're **visibly separated**. The angle between "cat" and "mouse" is about 1.8°, which creates **some decay** in their attention score.
 
 **Dimensions 3-4 (fast rotation, $\theta_2 = 0.0001$):**
 ```
         North
             ↑
-            | • all tokens (0.0002-0.0005 rad)
-            | clustered extremely close
+            | • all tokens (0.0002-0.0005 rad ≈ 0.01-0.03°)
+            | all clustered on top of each other
             |
 West ←------O------→ East
             |
-         Start
+         Start (position 0)
 ```
-Tiny angles → tokens barely rotated at all! These dimensions maintain similarity even for "distant" tokens at these positions.
 
-**Key insight:** The two subspaces capture position information at different scales!
+Same process, but now the rotation angles are **100× smaller**! All three tokens have rotated less than 0.03° - so tiny they're essentially overlapping. In this subspace, "cat" and "mouse" are **still nearly identical** despite being 3 positions apart. These dimensions maintain strong attention even across moderate distances.
+
+**Key insight:** When computing the final attention score, we sum contributions from both subspaces:
+- **Dimensions 1-2** contribute: "moderate attention" (some separation due to 1.8° angle)
+- **Dimensions 3-4** contribute: "high attention" (nearly identical, <0.03° angle)
+- **Total attention:** Still relatively high!
+
+At distance 50, dimensions 1-2 would show 29° separation (significant decay), while dimensions 3-4 would show only 0.3° (still similar). This is how multiple frequencies capture position at different scales!
 
 ### Step 4: Compute Attention Scores
 
@@ -401,7 +422,10 @@ $$= 0.236 + 0.298 + 0.240 + 0.240 = 1.014$$
 - Slow dims: $50 \times 0.01 = 0.5$ rad (29°) → significant misalignment  
 - Fast dims: $50 \times 0.0001 = 0.005$ rad (0.3°) → still aligned
 
-This demonstrates **why RoPE uses multiple frequencies**: slow θ₁ captures position separation, fast θ₂ maintains local context. The model learns which frequency to weight for different patterns through W_q and W_k.
+This demonstrates **why RoPE uses multiple frequencies**: slow θ₁ captures position separation, fast θ₂ maintains local context. The model learns which frequency to weight for different patterns through $$W_q$$ and $$W_k$$.
+
+- "For this linguistic pattern, listen to slow-rotating pairs"
+- "For that linguistic pattern, listen to fast-rotating pairs"
 
 ### The Key Property: Only Relative Distance Matters
 
