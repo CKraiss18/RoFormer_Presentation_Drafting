@@ -172,7 +172,7 @@ $$
 
 4. $K \leftarrow [R^d_{\Theta,1} W_k Z[:,1], R^d_{\Theta,2} W_k Z[:,2], \ldots, R^d_{\Theta,\ell_z} W_k Z[:,\ell_z]]$ $\triangleright$ Apply rotation to keys
 5. $V \leftarrow W_v Z + b_v \mathbf{1}^T$ $\triangleright$ Values NOT rotated
-6. $S \leftarrow Q^T K$ $\triangleright$ Compute attention scores *Relative Position Magic Here!*
+6. $S \leftarrow Q^T K$ $\triangleright$ Compute attention scores **(relative position emerges here via $R_m^T R_n = R_{(n-m)}$)**
 7. Apply masking to $S$ if needed
 8. **return** $\tilde{X} \leftarrow V \cdot \text{softmax}(S / \sqrt{d_{\text{attn}}})$
 
@@ -436,19 +436,16 @@ $$R_2^T R_5 = R_{5-2} = R_3$$
 This relative rotation (distance = 3) is **identical** for ANY token pair 3 positions apart - whether at positions (2,5), (10,13), or (100,103)!
 
 **Long-term decay in action:**
-- **Distance 1:** Both frequencies barely rotated → **HIGH attention**
-- **Distance 3:** Slow dims slightly rotated, fast dims unchanged → **MODERATE attention**
-- **Distance 50:** Slow dims significantly rotated, fast dims noticeable → **LOW attention**
-- **Distance 500:** Slow dims nearly opposite, fast dims weakened → **VERY LOW attention**
 
-The decay happens **automatically** across multiple scales without any explicit distance penalty!
+As distance increases, rotation angles grow, reducing attention **automatically** without any explicit penalty:
 
-- **Short distances:** Both frequency bands contribute positively → strong attention
-- **Medium distances:** Slow frequencies start diverging → moderate attention  
-- **Long distances:** Slow frequencies oppose, fast frequencies weaken → low attention
-- **Very long distances:** Both frequency bands contribute weakly or negatively → minimal attention
+- **Distance 1:** Both frequencies barely rotated (≈0.01° and 0.0001°) → **HIGH attention**
+- **Distance 3:** Slow dims slightly rotated (≈1.7°), fast dims unchanged (≈0.02°) → **MODERATE attention**
+- **Distance 50:** Slow dims significantly rotated (≈29°), fast dims noticeable (≈0.3°) → **LOW attention**
+- **Distance 500:** Slow dims nearly opposite (≈286°), fast dims weakened (≈3°) → **VERY LOW attention**
 
-**The decay happens naturally and automatically** across multiple scales, without any explicit distance penalty! The model learns to use different frequency bands for different linguistic relationships during training.
+The decay happens naturally across multiple scales! The model learns during training to weight different frequency bands for different linguistic patterns - fast frequencies for local syntax, slow frequencies for long-range dependencies.
+
 ---
 
 ## Question 1: Sequence Length Flexibility
@@ -486,23 +483,39 @@ $$R_m = \begin{bmatrix} \cos(m\theta) & -\sin(m\theta) \\ \sin(m\theta) & \cos(m
 </details>
 
 ---
+## Question 2: The Special Property of Rotation Matrices
 
-## Why Rotation Works Better Than Addition
+**Q:** RoPE uses rotation matrices instead of adding position embeddings. When we compute attention between two tokens at positions $m$ and $n$, their rotated queries and keys interact through $R_m^T R_n$. What special property do rotation matrices have that makes attention depend **only on relative distance** $(n-m)$, and why doesn't traditional additive position encoding have this property?
 
-### Mathematical Comparison
+<details>
+<summary>⚠️ Another warning...</summary>
 
-**Traditional (Addition):**
+![Math Ahead Warning](more-maths.png)
 
-$$q_m = W_q(x_m + p_m)$$
-$$k_n = W_k(x_n + p_n)$$
+</details>
 
-$$q_m^T k_n = (W_q x_m + W_q p_m)^T (W_k x_n + W_k p_n)$$
+<details>
+<summary>Click to reveal answer</summary>
 
-Expanding this:
+**Answer:** Rotation matrices have a special **group property** that makes relative position automatic: ${R_m}^T R_n = R_{(n-m)}$
 
-$$= x_m^T W_q^T W_k x_n + x_m^T W_q^T W_k p_n + p_m^T W_q^T W_k x_n + p_m^T W_q^T W_k p_n$$
+### The Group Property
 
-This has **FOUR terms** with absolute positions $m$ and $n$ appearing separately. The model must learn to extract relative position from these mixed terms.
+Rotations have inverses ($R_m^T = R_{-m}$) and compose ($R_m \cdot R_n = R_{m+n}$). Therefore:
+
+$$R_m^T R_n = R_{-m} \cdot R_n = R_{n-m}$$
+
+When computing attention:
+
+$$q_m^T k_n = x_m^T W_q^T R_m^T R_n W_k x_n$$
+
+Note that $R_m^T R_n = R_{(n-m)}$ (the relative distance), so:
+
+$$q_m^T k_n = x_m^T W_q^T R_{(n-m)} W_k x_n$$
+
+The attention score depends only on **relative distance** $(n-m)$, not absolute positions $m$ and $n$ individually!
+
+### Mathematical Comparison: Why Rotation vs Addition?
 
 **RoPE (Rotation):**
 
@@ -511,60 +524,28 @@ $$k_n = R_n W_k x_n$$
 
 $$q_m^T k_n = x_m^T W_q^T R_m^T R_n W_k x_n = x_m^T W_q^T R_{(n-m)} W_k x_n$$
 
-Only **ONE term** appears, and it directly contains the **relative distance $(n-m)$** because:
+Only **ONE term** appears, directly containing **relative distance** $(n-m)$ due to the group property: ${R_m}^T R_n = R_{(n-m)}$
 
-$${R_{\Theta,m}^d}^T R_{\Theta,n}^d = R_{\Theta,n-m}^d \quad \text{(property of rotation matrices)}$$
+**Traditional Addition:**
 
----
+$$q_m = W_q(x_m + p_m)$$
+$$k_n = W_k(x_n + p_n)$$
 
-## Question 2: The Special Property of Rotation Matrices
+$$q_m^T k_n = (W_q x_m + W_q p_m)^T (W_k x_n + W_k p_n)$$
 
-**Q:** We've seen that rotation has the property ${R_m}^T R_n = R_{(n-m)}$, which directly encodes relative position. But why is this property unique to rotation? What makes rotation matrices special compared to other transformations, and why can't we achieve the same effect with traditional additive position encoding?
-
-<details>
-<summary>Click to reveal answer</summary>
-
-**Answer:** The property ${R_m}^T R_n = R_{(n-m)}$ comes from rotation matrices forming a mathematical **group**. This algebraic structure makes rotation special.
-
-### The Group Property
-
-Rotation matrices have these properties:
-1. **Inverse:** $R_m^T = R_{-m}$ (rotating backwards undoes the rotation)
-2. **Composition:** $R_m \cdot R_n = R_{m+n}$
-
-From these:
-$$R_m^T R_n = R_{-m} \cdot R_n = R_{n-m}$$
-
-**This encodes relative position!** When computing attention $q_m^T k_n$:
-
-$$q_m^T k_n = (R_m W_q x_m)^T (R_n W_k x_n) = x_m^T W_q^T \underbrace{R_m^T R_n}_{R_{(n-m)}} W_k x_n$$
-
-The attention score depends only on **relative distance** $(n-m)$, not absolute positions $m$ and $n$ individually.
-
-### Why Addition Doesn't Work
-
-With additive encoding: $q_m = W_q(x_m + p_m)$, $k_n = W_k(x_n + p_n)$
-
-Computing $q_m^T k_n$ gives:
+Expanding:
 
 $$= x_m^T W_q^T W_k x_n + x_m^T W_q^T W_k p_n + p_m^T W_q^T W_k x_n + p_m^T W_q^T W_k p_n$$
 
-**Four separate terms** with $p_m$ and $p_n$ appearing independently - no automatic cancellation to leave only $(n-m)$. The model must **learn** to extract relative position from these mixed terms.
+**Four separate terms** with $p_m$ and $p_n$ appearing independently - no automatic cancellation to leave only $(n-m)$. The model must **learn** to extract relative position from these mixed absolute positions.
 
-### Why Group Structure Matters
+### Why This Matters
 
-**Rotation:** Geometric transformation with algebraic structure
-- $R_{m+n} = R_m \cdot R_n$ → rotations compose
-- $R_{-m} = R_m^{-1}$ → rotations have inverses  
-- **Result:** $R_m^T R_n = R_{n-m}$ → relative distance emerges automatically
+- **Rotation:** Group structure means $R_m^T R_n = R_{(n-m)}$ automatically → relative position is built-in
+- **Addition:** No composition rule → relative position must be learned from data
+- **Linear Attention:** The clean composition $R_m^T R_n = R_{(n-m)}$ preserves structure needed for $O(N)$ linear attention
 
-**Addition:** Simple arithmetic without geometric structure
-- No composition rule that cancels absolute positions
-- Relative distance $(n-m)$ must be learned, not automatic
-
-**Linear Attention Compatibility:** The clean composition $R_m^T R_n = R_{(n-m)}$ preserves the structure needed for linear attention, enabling $O(N)$ complexity.
-
-**The fundamental insight:** Rotation matrices have algebraic properties (group structure) that make relative position encoding "automatic." Other transformations don't have these properties, so relative position must be learned from absolute positions.
+**The fundamental insight:** Rotation's algebraic properties (group structure) make relative position encoding "automatic" - other transformations lack this, requiring the model to learn position relationships from scratch.
 
 </details>
 
@@ -616,9 +597,11 @@ RoPE has become the **de facto standard** for position encoding in modern large 
 - Traditional absolute position embeddings fail at unseen lengths
 
 **4. Linear Attention Compatibility**
-- RoPE works with $O(N)$ linear attention mechanisms
-- Traditional additive encoding breaks linear attention decomposition
-- Critical for scaling to 100K+ token contexts
+- Traditional transformers have $O(N^2)$ attention complexity - computing all pairwise token interactions becomes prohibitively expensive for long sequences
+- RoPE works with $O(N)$ linear attention mechanisms that decompose attention efficiently
+- Traditional additive encoding breaks linear attention decomposition due to the four-term expansion
+- Critical for scaling to 100K+ token contexts - makes the difference between feasible and infeasible
+  
 ### Core Architectural Properties
 
 **1. Explicit Relative Position Encoding**
@@ -671,7 +654,7 @@ This methodology contrasts with trial-and-error architecture search and influenc
 
 **1. Limited Theoretical Analysis of Why It Converges Faster**
 
-The paper shows RoFormer converges faster than BERT empirically (Figure 3), but doesn't provide deep theoretical explanation of WHY. They prove long-term decay (Section 3.4.3) but don't connect this to optimization dynamics.
+The paper shows RoFormer converges faster than BERT empirically, but doesn't provide deep theoretical explanation of WHY. They prove long-term decay (Section 3.4.3) but don't connect this to optimization dynamics.
 
 **The authors explicitly acknowledge this limitation (Section 4.5.5):** "Although we have proved that our model has favourable property of long-term decay for inter-token products, Section (3.3), which is similar to the existing position encoding mechanisms, our model shows superior performance on long texts than peer models, we have not come up with a faithful explanation."
 
@@ -700,13 +683,6 @@ RoPE is derived for sequential 1D data. What about:
 
 **Subsequent work** (e.g., RoPE-2D, RoPE-3D) has begun addressing this, showing the core principle generalizes beyond 1D sequences.
 
-**4. Computational Overhead Not Fully Analyzed**
-
-While they provide efficient implementation (Section 3.4.2), they don't benchmark actual wall-clock time vs traditional approaches at scale. Questions remain:
-- What is the actual throughput (tokens/second) compared to additive encoding?
-- Does the 2× theoretical operation count translate to 2× wall-clock time, or do optimizations close this gap?
-- At what sequence length does the overhead become prohibitive?
-
 ### Errors or Disputed Findings?
 
 **No major errors found.** The mathematical derivation is sound and the experimental results are reproducible.
@@ -717,8 +693,6 @@ While they provide efficient implementation (Section 3.4.2), they don't benchmar
 - Numerical precision at extreme sequence lengths (e.g., 1M+ tokens)
 - Does the decay property remain beneficial at all scales?
 - Are there sequence lengths where the approximation breaks down?
-
-**Subsequent work** (ALiBi, 2021) has shown even simpler approaches can work well, suggesting RoPE may not be the only solution - but it remains the most widely adopted, likely due to its principled mathematical foundation and strong empirical results.
 
 ---
 
@@ -740,7 +714,7 @@ While they provide efficient implementation (Section 3.4.2), they don't benchmar
 
 ### 2. Geometric Inductive Biases Through Algebraic Structure
 
-**Insight:** Rotation matrices have **group structure** that perfectly encodes linguistic properties (relative distance, decay). This wasn't obvious - it was derived from first principles!
+**Insight:** Rotation matrices have **group structure** that perfectly encodes linguistic properties (relative distance, decay).
 
 **The key:** Find mathematical operations whose **algebraic properties** match the domain structure:
 - Rotation → relative distance (through ${R_m}^T R_n = R_{(n-m)}$)
