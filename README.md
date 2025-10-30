@@ -675,8 +675,8 @@ Given that RoPE naturally creates position-dependent attention scores, understan
 **3. Extension to Other Modalities**
 
 RoPE is derived for sequential 1D data. What about:
-- 2D positional encoding for images (where position is $(x, y)$)?
-- 3D for video $(x, y, t)$)?
+- 2D positional encoding for images (where position is $$(x, y)$$)?
+- 3D for video $$(x, y, t)$$)?
 - Graph structures where "position" is less clear?
 
 **The authors note:** "The experimental results also show that our proposed RoFormer can achieve better performance on long texts task" but don't explore whether this extends to other structured data types.
